@@ -28,6 +28,9 @@ Panel {
 
   // Headset, from headsetcontrol.
   property var battery: Model.EMPTY_BATTERY
+  // A reading that differs from `battery`, waiting for a second read to agree.
+  property var pendingBattery: null
+  property int confirmAttempts: 0
   readonly property bool present: battery.present
   readonly property bool hasLevel: battery.level >= 0
   readonly property bool charging: battery.status === "charging"
@@ -89,6 +92,17 @@ Panel {
   // ================= Actions =================
 
   function refreshBattery() { if (!batteryProc.running) batteryProc.running = true }
+
+  // A reading that would change what is shown waits for a second read to
+  // agree, because headsetcontrol sometimes returns a bogus one (see
+  // Model.confirmBattery).
+  function takeBatteryReading(reading) {
+    var next = Model.confirmBattery({ shown: battery, pending: pendingBattery, attempts: confirmAttempts }, reading)
+    battery = next.shown
+    pendingBattery = next.pending
+    confirmAttempts = next.attempts
+    if (next.recheck) confirmTimer.restart()
+  }
   function refreshEq() { if (!eqProc.running) eqProc.running = true }
 
   function setBypassed(bypassed) {
@@ -117,12 +131,19 @@ Panel {
 
   // ================= Data sources =================
 
+  // Every bar (one per monitor) runs its own copy of this widget, and they
+  // poll at the same moment. Two headsetcontrol processes talking to the
+  // headset at once get each other's replies (3 at once: ~9 in 10 reads
+  // wrong), so all reads go through one lock and happen one at a time.
+  readonly property string headsetLock:
+    (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omabateq-headsetcontrol.lock"
+
   Process {
     id: batteryProc
-    command: ["headsetcontrol", "-b", "-o", "json"]
+    command: ["flock", "-w", "10", root.headsetLock, "headsetcontrol", "-b", "-o", "json"]
     stdout: StdioCollector {
       waitForEnd: true
-      onStreamFinished: root.battery = Model.parseBattery(text)
+      onStreamFinished: root.takeBatteryReading(Model.parseBattery(text))
     }
   }
 
@@ -163,6 +184,7 @@ Panel {
   // Easy Effects can change preset by itself (per-device autoload).
   Timer { interval: 3000; running: root.opened; repeat: true; onTriggered: root.refreshEq() }
   Timer { id: afterStart; interval: 1500; onTriggered: root.refreshEq() }
+  Timer { id: confirmTimer; interval: 400; onTriggered: root.refreshBattery() }
 
   Component.onCompleted: refreshBattery()
   onOpenedChanged: if (opened) { refreshBattery(); refreshEq() }

@@ -48,6 +48,35 @@ function parseBattery(raw) {
 }
 
 
+// Whether two readings would show the same thing.
+function sameBattery(a, b) {
+  return !!a && !!b && a.present === b.present && a.status === b.status && a.level === b.level
+}
+
+// headsetcontrol reads some headsets' battery as several request/reply pairs
+// without checking which reply belongs to which request. Anything else on the
+// line in between shifts them, and the read comes back as e.g. "not charging,
+// 1 %". The panel already keeps its own reads from overlapping (a lock, see
+// Panel.qml); this catches the rest (seen on the HyperX Cloud Alpha Wireless,
+// about 1 read in 150): a reading that would change what is shown is only
+// taken once a second read agrees with it.
+//
+//   state    { shown, pending, attempts }
+//   returns  the next state, plus `recheck: true` when another read is needed
+var MAX_CONFIRM_ATTEMPTS = 3
+
+function confirmBattery(state, reading) {
+  if (sameBattery(reading, state.shown))
+    return { shown: state.shown, pending: null, attempts: 0, recheck: false }
+  if (sameBattery(reading, state.pending))
+    return { shown: reading, pending: null, attempts: 0, recheck: false }
+  if (state.attempts < MAX_CONFIRM_ATTEMPTS)
+    return { shown: state.shown, pending: reading, attempts: state.attempts + 1, recheck: true }
+  // Readings keep disagreeing: keep what is shown until the next regular poll.
+  return { shown: state.shown, pending: null, attempts: 0, recheck: false }
+}
+
+
 // ---------- Easy Effects state ----------
 
 // bin/eq-state output (key=value lines) → { running, preset, bypassed, presets }

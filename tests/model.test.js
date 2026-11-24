@@ -9,7 +9,7 @@ const assert = require("assert")
 const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
   .replace(/^\.pragma library\s*$/m, "")
 const Model = new Function(source +
-  "; return { parseBattery, parseEqState, parsePreset, isPresetName, prettyPreset, response }")()
+  "; return { parseBattery, confirmBattery, parseEqState, parsePreset, isPresetName, prettyPreset, response }")()
 
 function test(name, fn) {
   try { fn(); console.log("  ok  " + name) }
@@ -42,6 +42,35 @@ test("battery: no device, bad JSON, out-of-range level", () => {
   assert.strictEqual(Model.parseBattery('{"device_count":0,"devices":[]}').present, false)
   assert.strictEqual(Model.parseBattery("not json").present, false)
   assert.strictEqual(Model.parseBattery(device({ status: "BATTERY_AVAILABLE", level: 900 })).level, -1)
+})
+
+test("battery: a one-off bogus reading is never shown", () => {
+  const charging = Model.parseBattery(device({ status: "BATTERY_CHARGING", level: -1 }))
+  const bogus = Model.parseBattery(device({ status: "BATTERY_AVAILABLE", level: 1 }))
+  let s = { shown: charging, pending: null, attempts: 0 }
+  s = Model.confirmBattery(s, bogus)        // differs: hold it, read again
+  assert.deepStrictEqual([s.shown, s.recheck], [charging, true])
+  s = Model.confirmBattery(s, charging)     // the re-read disagrees with it: dropped
+  assert.deepStrictEqual([s.shown, s.pending, s.recheck], [charging, null, false])
+})
+
+test("battery: a real change is shown once a second read agrees", () => {
+  const charging = Model.parseBattery(device({ status: "BATTERY_CHARGING", level: -1 }))
+  const unplugged = Model.parseBattery(device({ status: "BATTERY_AVAILABLE", level: 93 }))
+  let s = Model.confirmBattery({ shown: charging, pending: null, attempts: 0 }, unplugged)
+  assert.strictEqual(s.shown, charging)
+  s = Model.confirmBattery(s, unplugged)
+  assert.deepStrictEqual([s.shown, s.recheck], [unplugged, false])
+})
+
+test("battery: readings that never agree stop rechecking after 3 tries", () => {
+  // As in the panel: a poll, then re-reads only while `recheck` asks for one.
+  const level = n => Model.parseBattery(device({ status: "BATTERY_AVAILABLE", level: n }))
+  let s = Model.confirmBattery({ shown: level(50), pending: null, attempts: 0 }, level(1))
+  let reads = 1
+  while (s.recheck && reads < 20) s = Model.confirmBattery(s, level(++reads))
+  assert.strictEqual(reads, 4)              // the poll + 3 re-reads
+  assert.deepStrictEqual([s.shown.level, s.pending], [50, null])
 })
 
 test("eq state: parses and drops unsafe preset names", () => {
