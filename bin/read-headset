@@ -1,0 +1,38 @@
+#!/bin/sh
+# Reads the headset battery (`headsetcontrol -b -o json`) into a shared file
+# that every bar's copy of the widget watches, so all bars show the same
+# reading and a refresh from one of them updates all of them.
+#
+#   read-headset [max-age]   skip the read when the file is newer than
+#                            max-age seconds (default 0: always read)
+#
+# headsetcontrol reads some headsets' battery as several request/reply pairs
+# and takes whatever reply comes next, so two things break it:
+#
+#   - Two reads at once. Reads take turns through one lock, and a bar whose
+#     turn comes right after another bar's read uses that result instead.
+#   - A read cut off halfway. Its reply stays in the headset and the next
+#     read gets that instead of its own. The shell kills this script when the
+#     plugin reloads or the shell restarts, so the read runs in the
+#     background and the script waits for it: killing the script doesn't stop
+#     the read, and the lock stays held until it is done.
+
+dir="${XDG_RUNTIME_DIR:-/tmp}/omabateq"
+cache="$dir/headset.json"
+lock="$dir/headsetcontrol.lock"
+
+if [ "$1" = "--locked" ]; then
+  max_age="$2"
+  if [ -s "$cache" ]; then
+    age=$(( $(date +%s) - $(stat -c %Y "$cache") ))
+    [ "$age" -lt "$max_age" ] && exit 0
+  fi
+  out=$(headsetcontrol -b -o json 2>/dev/null)
+  # One write, so a watching bar never sees a half-written file.
+  [ -n "$out" ] && printf '%s\n' "$out" > "$cache"
+  exit 0
+fi
+
+mkdir -p "$dir"
+flock -w 10 "$lock" sh "$0" --locked "${1:-0}" &
+wait

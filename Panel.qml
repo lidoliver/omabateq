@@ -2,17 +2,21 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 import Quickshell.Services.Pipewire
+import Quickshell.Services.UPower
 import qs.Commons
 import qs.Commons as Commons
 import qs.Ui
 import "Model.js" as Model
 
-// omabateq: headset battery in the bar, and a panel with the battery plus the
+// omabateq: headset battery in the bar, and a panel with the battery, the
 // live Easy Effects equalizer (preset, response curve, bypass switch, output
-// level, preset buttons).
+// level, preset buttons) and, when there is one, the mouse battery.
 //
 // Where the data comes from:
-//   battery        `headsetcontrol -b -o json`, polled
+//   headset        bin/read-headset (headsetcontrol) writes a shared file that
+//                  every bar watches: once a minute, and right away when a USB
+//                  device comes or goes (e.g. the charging cable)
+//   mouse          UPower, through Quickshell (live, no polling)
 //   Easy Effects   bin/eq-state (its CLI), polled while the panel is open
 //   EQ curve       the active preset's JSON file, watched for changes
 //   live / meter   the PipeWire graph, through Quickshell
@@ -35,6 +39,20 @@ Panel {
   readonly property bool hasLevel: battery.level >= 0
   readonly property bool charging: battery.status === "charging"
   readonly property bool headsetOff: battery.status === "off"
+
+  // Mouse, from UPower. Only devices that report a battery are listed there,
+  // so a wired-only mouse never shows. `showMouse: false` in the widget's
+  // shell.json entry turns it off.
+  readonly property bool showMouse: setting("showMouse", true) === true
+  readonly property var mouseDevice: {
+    var devices = UPower.devices ? UPower.devices.values : []
+    for (var i = 0; i < devices.length; i++)
+      if (devices[i] && devices[i].type === UPowerDeviceType.Mouse && devices[i].isPresent) return devices[i]
+    return null
+  }
+  readonly property var mouse: showMouse
+    ? Model.mouseBattery(mouseDevice, { charging: UPowerDeviceState.Charging, fullyCharged: UPowerDeviceState.FullyCharged })
+    : Model.EMPTY_MOUSE
 
   // Easy Effects, from bin/eq-state.
   property var eq: Model.EMPTY_EQ
@@ -59,18 +77,30 @@ Panel {
     return false
   }
 
-  readonly property string eqStateScript: String(Qt.resolvedUrl("bin/eq-state")).replace(/^file:\/\//, "")
+  readonly property string eqStateScript: scriptPath("bin/eq-state")
+  readonly property string readHeadsetScript: scriptPath("bin/read-headset")
+
+  function scriptPath(relative) {
+    return String(Qt.resolvedUrl(relative)).replace(/^file:\/\//, "")
+  }
 
 
   // ================= Text =================
 
   readonly property string headsetGlyph: "󰋎"
+  readonly property string mouseGlyph: "󰍽"
   readonly property string chargingGlyph: "󰂄"
 
   readonly property string percentText: hasLevel ? Commons.I18n.formatNumber(battery.level) + "%" : ""
+  readonly property string mousePercentText: mouse.level >= 0 ? Commons.I18n.formatNumber(mouse.level) + "%" : ""
+
+  // The bar shows the headset; with no headset around, the mouse instead.
+  readonly property bool barShowsMouse: !present && mouse.present
+  readonly property string barGlyph: barShowsMouse ? mouseGlyph : headsetGlyph
 
   // Next to the bar icon: the level, or a charging glyph when there is none.
   readonly property string barLabel: {
+    if (barShowsMouse) return mousePercentText
     if (!present || headsetOff) return ""
     if (hasLevel) return percentText
     return charging ? chargingGlyph : ""
@@ -91,11 +121,19 @@ Panel {
 
   // ================= Actions =================
 
-  function refreshBattery() { if (!batteryProc.running) batteryProc.running = true }
+  // Asks for a battery read. Every bar asks, so a bar takes a reading that
+  // is younger than `maxAge` seconds instead of reading again; the result
+  // reaches all bars through the shared file (headsetFile below).
+  function refreshBattery(maxAge) {
+    if (batteryProc.running) return
+    batteryProc.command = ["sh", root.readHeadsetScript, String(maxAge || 0)]
+    batteryProc.running = true
+  }
 
   // A reading that would change what is shown waits for a second read to
   // agree, because headsetcontrol sometimes returns a bogus one (see
-  // Model.confirmBattery).
+  // Model.confirmBattery). Every bar sees the same readings in the same
+  // order, so they all come to the same answer.
   function takeBatteryReading(reading) {
     var next = Model.confirmBattery({ shown: battery, pending: pendingBattery, attempts: confirmAttempts }, reading)
     battery = next.shown
@@ -131,19 +169,19 @@ Panel {
 
   // ================= Data sources =================
 
-  // Every bar (one per monitor) runs its own copy of this widget, and they
-  // poll at the same moment. Two headsetcontrol processes talking to the
-  // headset at once get each other's replies (3 at once: ~9 in 10 reads
-  // wrong), so all reads go through one lock and happen one at a time.
-  readonly property string headsetLock:
-    (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omabateq-headsetcontrol.lock"
+  // bin/read-headset does the reading: one at a time across bars, safe to
+  // kill, and into the shared file (see the script).
+  Process { id: batteryProc }
 
-  Process {
-    id: batteryProc
-    command: ["flock", "-w", "10", root.headsetLock, "headsetcontrol", "-b", "-o", "json"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: root.takeBatteryReading(Model.parseBattery(text))
+  FileView {
+    id: headsetFile
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omabateq/headset.json"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: {
+      var raw = text()
+      if (raw.trim() !== "") root.takeBatteryReading(Model.parseBattery(raw))
     }
   }
 
@@ -180,31 +218,46 @@ Panel {
   }
 
   // Battery: every minute, every 10 s while the panel is open.
-  Timer { interval: root.opened ? 10000 : 60000; running: true; repeat: true; onTriggered: root.refreshBattery() }
+  Timer { interval: root.opened ? 10000 : 60000; running: true; repeat: true; onTriggered: root.refreshBattery(root.opened ? 5 : 20) }
   // Easy Effects can change preset by itself (per-device autoload).
   Timer { interval: 3000; running: root.opened; repeat: true; onTriggered: root.refreshEq() }
   Timer { id: afterStart; interval: 1500; onTriggered: root.refreshEq() }
-  Timer { id: confirmTimer; interval: 400; onTriggered: root.refreshBattery() }
+  Timer { id: confirmTimer; interval: 1000; onTriggered: root.refreshBattery(1) }
 
-  Component.onCompleted: refreshBattery()
-  onOpenedChanged: if (opened) { refreshBattery(); refreshEq() }
+  // Plugging or unplugging a USB device (the headset's charging cable, its
+  // receiver) re-reads the battery a moment later instead of at the next poll.
+  Process {
+    id: usbEvents
+    command: ["udevadm", "monitor", "--udev", "--subsystem-match=usb/usb_device"]
+    running: true
+    stdout: SplitParser {
+      onRead: function(line) { if (/ (add|remove) /.test(line)) usbSettle.restart() }
+    }
+    onExited: usbRestart.restart()
+  }
+  Timer { id: usbSettle; interval: 1500; onTriggered: root.refreshBattery(1) }
+  Timer { id: usbRestart; interval: 5000; onTriggered: usbEvents.running = true }
+
+  Component.onCompleted: refreshBattery(20)
+  onOpenedChanged: if (opened) { refreshBattery(2); refreshEq() }
 
 
   // ================= Bar button =================
 
-  // Hidden while no supported headset/receiver is plugged in.
-  visible: present
-  implicitWidth: present ? button.implicitWidth : 0
-  implicitHeight: present ? button.implicitHeight : 0
+  // Hidden while there is neither a supported headset nor a mouse battery.
+  readonly property bool anything: present || mouse.present
+  visible: anything
+  implicitWidth: anything ? button.implicitWidth : 0
+  implicitHeight: anything ? button.implicitHeight : 0
 
   BarIconButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    text: root.headsetGlyph
+    text: root.barGlyph
     labelText: vertical ? "" : root.barLabel
     slotSize: Style.bar.iconSlot * (labelText !== "" ? 2 : 1)
-    opacity: root.headsetOff ? 0.45 : 1
+    opacity: !root.barShowsMouse && root.headsetOff ? 0.45 : 1
     tooltipText: ""
     onPressed: root.toggle()
   }
@@ -217,7 +270,7 @@ Panel {
     anchorItem: button
     owner: root
     bar: root.bar
-    open: root.opened && root.present
+    open: root.opened && root.anything
     focusTarget: panel.loadedContent
     contentWidth: panel.fittedContentWidth(Style.space(380))
     contentHeight: panel.fittedContentHeight(panel.loadedContentHeight)
@@ -237,62 +290,68 @@ Panel {
         spacing: Style.space(14)
 
         // ---------- Headset: icon · name / status · percentage ----------
-        Item {
+        Column {
+          visible: root.present
           width: parent.width
-          implicitHeight: Math.max(heroIcon.implicitHeight, heroText.implicitHeight, heroPercent.implicitHeight)
+          spacing: Style.space(14)
 
-          Label {
-            id: heroIcon
-            text: root.headsetGlyph
-            font.pixelSize: Style.font.display
-            opacity: root.headsetOff ? 0.45 : 1
-            anchors.left: parent.left
-            anchors.verticalCenter: parent.verticalCenter
-          }
-
-          Column {
-            id: heroText
-            anchors.left: heroIcon.right
-            anchors.leftMargin: Style.space(14)
-            anchors.right: heroPercent.left
-            anchors.rightMargin: Style.space(10)
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: Style.space(2)
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(heroIcon.implicitHeight, heroText.implicitHeight, heroPercent.implicitHeight)
 
             Label {
-              width: parent.width
-              text: root.battery.name || strings.t("title")
-              font.pixelSize: Style.font.title
+              id: heroIcon
+              text: root.headsetGlyph
+              font.pixelSize: Style.font.display
+              opacity: root.headsetOff ? 0.45 : 1
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+
+            Column {
+              id: heroText
+              anchors.left: heroIcon.right
+              anchors.leftMargin: Style.space(14)
+              anchors.right: heroPercent.left
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              Label {
+                width: parent.width
+                text: root.battery.name || strings.t("title")
+                font.pixelSize: Style.font.title
+                font.bold: true
+                elide: Text.ElideRight
+              }
+              Caption {
+                width: parent.width
+                text: root.statusText
+                elide: Text.ElideRight
+              }
+            }
+
+            Label {
+              id: heroPercent
+              text: root.percentText || "—"
+              font.pixelSize: Style.font.displayLarge
               font.bold: true
-              elide: Text.ElideRight
-            }
-            Caption {
-              width: parent.width
-              text: root.statusText
-              elide: Text.ElideRight
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
             }
           }
 
-          Label {
-            id: heroPercent
-            text: root.percentText || "—"
-            font.pixelSize: Style.font.displayLarge
-            font.bold: true
-            anchors.right: parent.right
-            anchors.verticalCenter: parent.verticalCenter
+          // Without a level (charging on the cable) the bar stays full and faint.
+          LevelBar {
+            width: parent.width
+            foreground: root.bar.foreground
+            value: root.hasLevel ? root.battery.level / 100 : (root.charging ? 1 : 0)
+            fillOpacity: root.hasLevel ? 1 : 0.35
+            pulsing: root.charging && root.opened
           }
-        }
 
-        // Without a level (charging on the cable) the bar stays full and faint.
-        LevelBar {
-          width: parent.width
-          foreground: root.bar.foreground
-          value: root.hasLevel ? root.battery.level / 100 : (root.charging ? 1 : 0)
-          fillOpacity: root.hasLevel ? 1 : 0.35
-          pulsing: root.charging && root.opened
+          PanelSeparator { foreground: root.bar.foreground }
         }
-
-        PanelSeparator { foreground: root.bar.foreground }
 
         // ---------- Equalizer: title · status dot · bypass switch ----------
         Item {
@@ -478,6 +537,65 @@ Panel {
                 onClicked: root.loadPreset(modelData)
               }
             }
+          }
+        }
+
+        // ---------- Mouse: icon · name / status · percentage ----------
+        Column {
+          visible: root.mouse.present
+          width: parent.width
+          spacing: Style.space(10)
+
+          PanelSeparator { foreground: root.bar.foreground }
+
+          Item {
+            width: parent.width
+            implicitHeight: Math.max(mouseIcon.implicitHeight, mouseText.implicitHeight, mousePercent.implicitHeight)
+
+            Label {
+              id: mouseIcon
+              text: root.mouseGlyph
+              font.pixelSize: Style.font.title
+              anchors.left: parent.left
+              anchors.verticalCenter: parent.verticalCenter
+            }
+            Column {
+              id: mouseText
+              anchors.left: mouseIcon.right
+              anchors.leftMargin: Style.space(10)
+              anchors.right: mousePercent.left
+              anchors.rightMargin: Style.space(10)
+              anchors.verticalCenter: parent.verticalCenter
+              spacing: Style.space(2)
+
+              Label {
+                width: parent.width
+                text: root.mouse.name || strings.t("mouse.title")
+                font.bold: true
+                elide: Text.ElideRight
+              }
+              Caption {
+                width: parent.width
+                text: root.mouse.charging ? strings.t("status.charging") : strings.t("mouse.onBattery")
+                elide: Text.ElideRight
+              }
+            }
+            Label {
+              id: mousePercent
+              text: root.mousePercentText || "—"
+              font.pixelSize: Style.font.title
+              font.bold: true
+              anchors.right: parent.right
+              anchors.verticalCenter: parent.verticalCenter
+            }
+          }
+
+          LevelBar {
+            width: parent.width
+            implicitHeight: Style.space(4)
+            foreground: root.bar.foreground
+            value: root.mouse.level >= 0 ? root.mouse.level / 100 : 0
+            pulsing: root.mouse.charging && root.opened
           }
         }
       }

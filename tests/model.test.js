@@ -9,7 +9,7 @@ const assert = require("assert")
 const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
   .replace(/^\.pragma library\s*$/m, "")
 const Model = new Function(source +
-  "; return { parseBattery, confirmBattery, parseEqState, parsePreset, isPresetName, prettyPreset, response }")()
+  "; return { parseBattery, confirmBattery, mouseBattery, parseEqState, parsePreset, isPresetName, prettyPreset, response }")()
 
 function test(name, fn) {
   try { fn(); console.log("  ok  " + name) }
@@ -71,6 +71,15 @@ test("battery: readings that never agree stop rechecking after 3 tries", () => {
   while (s.recheck && reads < 20) s = Model.confirmBattery(s, level(++reads))
   assert.strictEqual(reads, 4)              // the poll + 3 re-reads
   assert.deepStrictEqual([s.shown.level, s.pending], [50, null])
+})
+
+test("mouse: UPower device → level, charging, name", () => {
+  const states = { charging: 1, fullyCharged: 4 }
+  assert.deepStrictEqual(Model.mouseBattery({ isPresent: true, percentage: 0.734, state: 2, model: "PRO X2" }, states),
+    { present: true, level: 73, charging: false, name: "PRO X2" })
+  assert.strictEqual(Model.mouseBattery({ isPresent: true, percentage: 1, state: 4 }, states).charging, true)
+  assert.strictEqual(Model.mouseBattery({ isPresent: false, percentage: 0.5 }, states).present, false)
+  assert.strictEqual(Model.mouseBattery(null, states).present, false)
 })
 
 test("eq state: parses and drops unsafe preset names", () => {

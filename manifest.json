@@ -18,6 +18,18 @@
     "description": "Headset battery and Easy Effects equalizer",
     "category": "Audio",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "right",
+    "schema": [
+      {
+        "key": "showMouse",
+        "type": "boolean",
+        "label": "Show mouse battery",
+        "description": "Show a wireless mouse's battery at the bottom of the panel, when the system reports one.",
+        "defaultValue": true
+      }
+    ],
+    "defaults": {
+      "showMouse": true
+    }
   }
 }

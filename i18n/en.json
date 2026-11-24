@@ -16,5 +16,7 @@
   "eq.notRunning": "Easy Effects is not running",
   "eq.start": "Start Easy Effects",
   "eq.output": "Output",
-  "eq.presets": "Presets"
+  "eq.presets": "Presets",
+  "mouse.title": "Mouse",
+  "mouse.onBattery": "On battery"
 }

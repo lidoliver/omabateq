@@ -6,7 +6,8 @@ A bar widget that shows your wireless headset's battery next to the volume
 icon. Click it for a panel with the battery and the live
 [Easy Effects](https://github.com/wwmm/easyeffects) equalizer: which preset is
 active, the curve it applies, an on/off switch, the output level, and buttons
-to switch presets.
+to switch presets. If your wireless mouse reports its battery, it shows at the
+bottom.
 
 <p align="center"><img src="preview.png" alt="The omabateq panel" width="386"></p>
 
@@ -14,8 +15,9 @@ to switch presets.
 
 **In the bar:** a headset icon with the battery percentage. It shows a
 charging symbol when the headset only reports that it is charging, fades when
-the headset is switched off, and disappears when no supported headset or
-receiver is plugged in.
+the headset is switched off, and switches to the mouse's battery when there is
+no headset. With neither, the widget is hidden. Plugging or unplugging the
+charging cable shows within a couple of seconds.
 
 **In the panel:**
 
@@ -28,6 +30,7 @@ receiver is plugged in.
 | Curve | The frequency response of that preset, 20 Hz–20 kHz, ±12 dB. Grey when bypassed |
 | Output | Live level reaching your output device, after the equalizer |
 | Presets | One button per saved output preset; click to load it |
+| Mouse | Name, charging or on battery, and its level. Only when the system reports a mouse battery |
 
 If Easy Effects isn't running, the panel says so and offers a button to start it.
 
@@ -36,10 +39,24 @@ If Easy Effects isn't running, the panel says so and offers a button to start it
 Everything comes from tools that are already on the system; the plugin only
 reads and displays it.
 
-- **Battery** — [`headsetcontrol`](https://github.com/Sapd/HeadsetControl)
+- **Headset battery** — [`headsetcontrol`](https://github.com/Sapd/HeadsetControl)
   talks to the headset over USB HID (through the wireless receiver).
-  The plugin runs `headsetcontrol -b -o json` once a minute, every 10 seconds
-  while the panel is open.
+  [`bin/read-headset`](bin/read-headset) runs `headsetcontrol -b -o json` and
+  writes the result to `$XDG_RUNTIME_DIR/omabateq/headset.json`, which every
+  bar (one per monitor) watches, so they all show the same thing. It reads
+  once a minute, every 10 seconds while the panel is open, and right after any
+  USB device is plugged in or out (`udevadm monitor`), which is how the
+  charging cable shows up quickly. Reads take turns through a lock, a bar
+  reuses a reading another bar just made, and a read keeps running if the
+  shell is restarted halfway: `headsetcontrol` takes whatever reply comes
+  next from the headset, so overlapping or interrupted reads give wrong
+  levels. A reading that would change what is shown is only taken once a
+  second read agrees with it.
+- **Mouse battery** — from UPower, through Quickshell. Logitech mice on their
+  receiver (kernel `hid-logitech-hidpp`), Bluetooth mice and others report
+  there; a mouse on a cable usually doesn't, so it isn't shown then. Turn it
+  off with `"showMouse": false` in the widget's entry in
+  `~/.config/omarchy/shell.json`.
 - **Equalizer state** — [`bin/eq-state`](bin/eq-state) asks Easy Effects
   through its command line for the loaded preset (`easyeffects -a output`),
   the bypass state (`easyeffects -b 3`) and the saved presets
@@ -170,6 +187,8 @@ Omarchy runs autostart entries as systemd user services at login.
 | Everything is much quieter with the EQ on | That's the preamp. Turn the volume up |
 | Easy Effects says the equalizer can't be used | `lsp-plugins-lv2` is missing. Install it and restart Easy Effects (`easyeffects -q`) |
 | Autoload never switches presets | Wrong `device-profile` (see step 4), or Easy Effects isn't following the default output |
+| No mouse in the panel | The mouse isn't reporting a battery to UPower (`upower -e` lists no `mouse_…` device). Wired mode usually doesn't; use its wireless receiver |
+| An edit to the plugin doesn't seem to apply | The shell's hot reload can keep an old copy of `Panel.qml` compiled. Run `omarchy restart shell` |
 
 ## Files
 
@@ -179,6 +198,7 @@ EqCurve.qml      the response plot
 LevelBar.qml     the battery bar and the output meter
 Model.js         parsing and the filter math, no QML
 bin/eq-state     reads Easy Effects' state through its CLI
+bin/read-headset reads the headset battery into the shared file
 i18n/en.json     the panel's text
 tests/           node tests for Model.js
 ```
@@ -189,8 +209,9 @@ Run the tests with:
 node tests/model.test.js
 ```
 
-Edit the files in `~/.config/omarchy/plugins/lidoliver.omabateq/` and the
-shell reloads the plugin on save.
+Edit the files in `~/.config/omarchy/plugins/lidoliver.omabateq/`. The shell
+reloads the plugin on save, but can keep running an old copy of `Panel.qml`;
+`omarchy restart shell` is the sure way to see a change.
 
 ## License
 

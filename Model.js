@@ -48,6 +48,27 @@ function parseBattery(raw) {
 }
 
 
+// ---------- Mouse battery (UPower) ----------
+
+var EMPTY_MOUSE = { present: false, level: -1, charging: false, name: "" }
+
+// A UPower device (or anything shaped like one) → { present, level, charging, name }.
+//   device   { isPresent, percentage (0..1), state, model }
+//   states   { charging, fullyCharged }: the UPowerDeviceState values to compare with
+// UPower only lists devices that report a battery, so a wired-only mouse never
+// gets here.
+function mouseBattery(device, states) {
+  if (!device || !device.isPresent) return EMPTY_MOUSE
+  var fraction = Number(device.percentage)
+  return {
+    present: true,
+    level: isFinite(fraction) ? Math.round(clamp(fraction, 0, 1) * 100) : -1,
+    charging: device.state === states.charging || device.state === states.fullyCharged,
+    name: String(device.model || "").slice(0, 60)
+  }
+}
+
+
 // Whether two readings would show the same thing.
 function sameBattery(a, b) {
   return !!a && !!b && a.present === b.present && a.status === b.status && a.level === b.level
