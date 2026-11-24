@@ -52,16 +52,19 @@ reads and displays it.
   next from the headset, so overlapping or interrupted reads give wrong
   levels. A reading that would change what is shown is only taken once a
   second read agrees with it.
-- **Mouse battery** — from UPower, through Quickshell, when it lists a mouse:
-  Logitech mice on their receiver (kernel `hid-logitech-hidpp`), Bluetooth
-  mice and others report there. A Logitech mouse on its cable (charging) is a
-  plain wired mouse to the kernel, so UPower drops it; with
-  [Solaar](https://github.com/pwr-Solaar/Solaar) installed,
-  [`bin/read-mouse`](bin/read-mouse) reads it with `solaar show` instead, into
-  a shared file like the headset's, on the same triggers. A UPower entry in the
-  *Unknown* state is ignored: that's the receiver remembering the mouse's last
-  level after it went wired. Turn the mouse off with `"showMouse": false` in
-  the widget's entry in `~/.config/omarchy/shell.json`.
+- **Mouse battery** — with [Solaar](https://github.com/pwr-Solaar/Solaar)
+  installed, [`bin/read-mouse`](bin/read-mouse) reads Logitech devices with
+  `solaar show` into a shared file like the headset's, on the same triggers
+  plus a second look 5 s after a USB event. Solaar talks to the mouse
+  directly, on its receiver and on its cable, so charging shows within a few
+  seconds of plugging in, under the name the mouse reports itself. Without
+  Solaar (or for other mice) it comes from UPower, through Quickshell: fine
+  on a receiver or Bluetooth, but a Logitech mouse on its cable is a plain
+  wired mouse to the kernel, so UPower keeps showing it on battery for a few
+  seconds and then drops it. A UPower entry in the *Unknown* state is
+  ignored: that's the receiver remembering the last level. Turn the mouse off
+  with `"showMouse": false` in the widget's entry in
+  `~/.config/omarchy/shell.json`.
 - **Equalizer state** — [`bin/eq-state`](bin/eq-state) asks Easy Effects
   through its command line for the loaded preset (`easyeffects -a output`),
   the bypass state (`easyeffects -b 3`) and the saved presets

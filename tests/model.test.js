@@ -108,6 +108,16 @@ test("solaar: wired mouse charging", () => {
     { present: true, level: 75, charging: true, name: "PRO X2 SUPERSTRIKE" })
 })
 
+test("solaar: the mouse's own name wins over the receiver's codename", () => {
+  const viaReceiver = SOLAAR_WIRED
+    .replace("Codename     : PRO X2 SUPERSTRIKE", "Codename     : X2 SUPERSTRIKE")
+    .replace("     Supports 36", "         3: DEVICE NAME {0005} V5\n            Name: PRO X2 SUPERSTRIKE\n     Supports 36")
+    .replace("RECHARGING", "DISCHARGING")
+  assert.strictEqual(Model.parseSolaarMouse(viaReceiver).name, "PRO X2 SUPERSTRIKE")
+  // Without a Name line, the codename.
+  assert.strictEqual(Model.parseSolaarMouse(SOLAAR_WIRED.replace("Codename     : PRO X2", "Codename     : X2")).name, "X2 SUPERSTRIKE")
+})
+
 test("solaar: discharging, keyboards skipped, nothing found", () => {
   const discharging = SOLAAR_WIRED.replace("RECHARGING", "DISCHARGING")
   assert.strictEqual(Model.parseSolaarMouse(discharging).charging, false)

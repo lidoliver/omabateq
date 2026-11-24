@@ -74,6 +74,9 @@ function mouseBattery(device, states) {
 // battery, shaped like mouseBattery(). Each device's block starts with its
 // "Codename" line; the battery line looks like
 //   "Battery: 75%, BatteryStatus.RECHARGING."
+// The name is the one the mouse reports itself ("Name: PRO X2 SUPERSTRIKE"),
+// else the codename: through a receiver the codename is the shorter name
+// stored at pairing ("X2 SUPERSTRIKE"), so it would change with the cable.
 // FULL counts as charging: a mouse only reports it while on the cable.
 var SOLAAR_CHARGING = ["RECHARGING", "SLOW_RECHARGE", "ALMOST_FULL", "FULL"]
 
@@ -92,14 +95,16 @@ function parseSolaarMouse(raw) {
           present: true,
           level: device.level,
           charging: SOLAAR_CHARGING.indexOf(device.status) >= 0,
-          name: device.name.slice(0, 60)
+          name: (device.fullName || device.name).slice(0, 60)
         }
       }
-      device = codename ? { name: codename[1], kind: "", level: -1, status: "" } : null
+      device = codename ? { name: codename[1], fullName: "", kind: "", level: -1, status: "" } : null
       continue
     }
     if (!device) continue
 
+    var fullName = line.match(/^\s*Name:\s*(.+?)\s*$/)
+    if (fullName && !device.fullName) device.fullName = fullName[1]
     var kind = line.match(/^\s*Kind\s*:\s*(\w+)/)
     if (kind) device.kind = kind[1]
     var battery = line.match(/Battery:\s*(\d{1,3})%,\s*BatteryStatus\.(\w+)/)

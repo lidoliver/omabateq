@@ -16,9 +16,8 @@ import "Model.js" as Model
 //   headset        bin/read-headset (headsetcontrol) writes a shared file that
 //                  every bar watches: once a minute, and right away when a USB
 //                  device comes or goes (e.g. the charging cable; inotifywait)
-//   mouse          UPower, through Quickshell (live, no polling); when UPower
-//                  has none (e.g. on its cable) and Solaar is installed,
-//                  bin/read-mouse (`solaar show`) into a shared file
+//   mouse          bin/read-mouse (`solaar show`) into a shared file, when
+//                  Solaar is installed and sees one; otherwise UPower
 //   Easy Effects   bin/eq-state (its CLI), polled while the panel is open
 //   EQ curve       the active preset's JSON file, watched for changes
 //   live / meter   the PipeWire graph, through Quickshell
@@ -42,11 +41,12 @@ Panel {
   readonly property bool charging: battery.status === "charging"
   readonly property bool headsetOff: battery.status === "off"
 
-  // Mouse: from UPower when it lists one (a wireless mouse on its receiver),
-  // otherwise from Solaar if installed (a Logitech mouse on its cable,
-  // charging, which the kernel then treats as a plain wired mouse). With
-  // neither, nothing shows. `showMouse: false` in the widget's shell.json
-  // entry turns it off.
+  // Mouse: from Solaar when it's installed and sees one, since it talks to the
+  // mouse directly, on the receiver or on the cable. UPower is the fallback,
+  // and doesn't help with the cable: the kernel then treats the mouse as a
+  // plain wired one, and UPower keeps showing it as on battery for a few
+  // seconds before dropping it. With neither, nothing shows.
+  // `showMouse: false` in the widget's shell.json entry turns it off.
   readonly property bool showMouse: setting("showMouse", true) === true
   readonly property var mouseDevice: {
     var devices = UPower.devices ? UPower.devices.values : []
@@ -61,9 +61,7 @@ Panel {
   })
   property var solaarMouse: Model.EMPTY_MOUSE
   readonly property var mouse: !showMouse ? Model.EMPTY_MOUSE
-    : (upowerMouse.present ? upowerMouse : solaarMouse)
-  // The mouse just left UPower (e.g. its cable went in): ask Solaar now.
-  onUpowerMouseChanged: if (!upowerMouse.present) refreshMouse(1)
+    : (solaarMouse.present ? solaarMouse : upowerMouse)
 
   // Easy Effects, from bin/eq-state.
   property var eq: Model.EMPTY_EQ
@@ -155,9 +153,9 @@ Panel {
   }
   function refreshEq() { if (!eqProc.running) eqProc.running = true }
 
-  // Only needed while UPower has no mouse; same max-age idea as the headset.
+  // Same max-age idea as the headset.
   function refreshMouse(maxAge) {
-    if (!showMouse || upowerMouse.present || mouseProc.running) return
+    if (!showMouse || mouseProc.running) return
     mouseProc.command = ["sh", root.readMouseScript, String(maxAge || 0)]
     mouseProc.running = true
   }
@@ -268,7 +266,10 @@ Panel {
     }
     onExited: usbRestart.restart()
   }
-  Timer { id: usbSettle; interval: 1500; onTriggered: { root.refreshBattery(1); root.refreshMouse(1) } }
+  Timer { id: usbSettle; interval: 1500; onTriggered: { root.refreshBattery(1); root.refreshMouse(1); usbLate.restart() } }
+  // A mouse switching between cable and receiver can take a few seconds to
+  // answer on its new connection, so it gets a second look.
+  Timer { id: usbLate; interval: 5000; onTriggered: root.refreshMouse(1) }
   Timer { id: usbRestart; interval: 5000; onTriggered: usbEvents.running = true }
 
   Component.onCompleted: { refreshBattery(20); refreshMouse(20) }

@@ -1,8 +1,8 @@
 #!/bin/sh
 # Reads Logitech devices with `solaar show` into a shared file that every bar
-# watches, for a mouse UPower doesn't report: typically one on its cable,
-# charging, which the kernel then treats as a plain wired mouse. Does nothing
-# when Solaar isn't installed.
+# watches. Solaar talks to the mouse directly, on its receiver or on its cable
+# (charging, when the kernel treats it as a plain wired mouse and UPower drops
+# it). Without Solaar the file is left empty and the panel uses UPower.
 #
 #   read-mouse [max-age]   skip the read when the file is newer than max-age
 #                          seconds (default 0: always read)
@@ -21,8 +21,9 @@ if [ "$1" = "--locked" ]; then
     age=$(( $(date +%s) - $(stat -c %Y "$out") ))
     [ "$age" -lt "$max_age" ] && exit 0
   fi
-  command -v solaar >/dev/null || exit 0
-  text=$(timeout 15 solaar show 2>/dev/null)
+  # Without Solaar, an empty file: the panel falls back to UPower.
+  text=""
+  command -v solaar >/dev/null && text=$(timeout 15 solaar show 2>/dev/null)
   # One write, so a watching bar never sees a half-written file.
   printf '%s\n' "$text" > "$out"
   exit 0
