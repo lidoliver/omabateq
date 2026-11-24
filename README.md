@@ -45,18 +45,23 @@ reads and displays it.
   writes the result to `$XDG_RUNTIME_DIR/omabateq/headset.json`, which every
   bar (one per monitor) watches, so they all show the same thing. It reads
   once a minute, every 10 seconds while the panel is open, and right after any
-  USB device is plugged in or out (`udevadm monitor`), which is how the
+  USB device is plugged in or out (`inotifywait` on `/dev/bus/usb`), which is how the
   charging cable shows up quickly. Reads take turns through a lock, a bar
   reuses a reading another bar just made, and a read keeps running if the
   shell is restarted halfway: `headsetcontrol` takes whatever reply comes
   next from the headset, so overlapping or interrupted reads give wrong
   levels. A reading that would change what is shown is only taken once a
   second read agrees with it.
-- **Mouse battery** — from UPower, through Quickshell. Logitech mice on their
-  receiver (kernel `hid-logitech-hidpp`), Bluetooth mice and others report
-  there; a mouse on a cable usually doesn't, so it isn't shown then. Turn it
-  off with `"showMouse": false` in the widget's entry in
-  `~/.config/omarchy/shell.json`.
+- **Mouse battery** — from UPower, through Quickshell, when it lists a mouse:
+  Logitech mice on their receiver (kernel `hid-logitech-hidpp`), Bluetooth
+  mice and others report there. A Logitech mouse on its cable (charging) is a
+  plain wired mouse to the kernel, so UPower drops it; with
+  [Solaar](https://github.com/pwr-Solaar/Solaar) installed,
+  [`bin/read-mouse`](bin/read-mouse) reads it with `solaar show` instead, into
+  a shared file like the headset's, on the same triggers. A UPower entry in the
+  *Unknown* state is ignored: that's the receiver remembering the mouse's last
+  level after it went wired. Turn the mouse off with `"showMouse": false` in
+  the widget's entry in `~/.config/omarchy/shell.json`.
 - **Equalizer state** — [`bin/eq-state`](bin/eq-state) asks Easy Effects
   through its command line for the loaded preset (`easyeffects -a output`),
   the bypass state (`easyeffects -b 3`) and the saved presets
@@ -86,6 +91,8 @@ reads and displays it.
   for the battery
 - [Easy Effects](https://github.com/wwmm/easyeffects) 8.x and
   `lsp-plugins-lv2` (its equalizer) for the equalizer part
+- Optional: [Solaar](https://github.com/pwr-Solaar/Solaar), to see a Logitech
+  mouse's battery while it charges on its cable
 
 Tested with a HyperX Cloud Alpha Wireless. Without a supported headset the
 widget stays hidden.
@@ -187,7 +194,7 @@ Omarchy runs autostart entries as systemd user services at login.
 | Everything is much quieter with the EQ on | That's the preamp. Turn the volume up |
 | Easy Effects says the equalizer can't be used | `lsp-plugins-lv2` is missing. Install it and restart Easy Effects (`easyeffects -q`) |
 | Autoload never switches presets | Wrong `device-profile` (see step 4), or Easy Effects isn't following the default output |
-| No mouse in the panel | The mouse isn't reporting a battery to UPower (`upower -e` lists no `mouse_…` device). Wired mode usually doesn't; use its wireless receiver |
+| No mouse in the panel | Nothing reports its battery: `upower -e` lists no mouse, and Solaar isn't installed or doesn't see it (`solaar show`). After installing Solaar, replug the mouse so its permission rules apply |
 | An edit to the plugin doesn't seem to apply | The shell's hot reload can keep an old copy of `Panel.qml` compiled. Run `omarchy restart shell` |
 
 ## Files
@@ -198,7 +205,8 @@ EqCurve.qml      the response plot
 LevelBar.qml     the battery bar and the output meter
 Model.js         parsing and the filter math, no QML
 bin/eq-state     reads Easy Effects' state through its CLI
-bin/read-headset reads the headset battery into the shared file
+bin/read-headset reads the headset battery into a shared file
+bin/read-mouse   reads a Logitech mouse through Solaar into a shared file
 i18n/en.json     the panel's text
 tests/           node tests for Model.js
 ```

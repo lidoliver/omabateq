@@ -15,8 +15,10 @@ import "Model.js" as Model
 // Where the data comes from:
 //   headset        bin/read-headset (headsetcontrol) writes a shared file that
 //                  every bar watches: once a minute, and right away when a USB
-//                  device comes or goes (e.g. the charging cable)
-//   mouse          UPower, through Quickshell (live, no polling)
+//                  device comes or goes (e.g. the charging cable; inotifywait)
+//   mouse          UPower, through Quickshell (live, no polling); when UPower
+//                  has none (e.g. on its cable) and Solaar is installed,
+//                  bin/read-mouse (`solaar show`) into a shared file
 //   Easy Effects   bin/eq-state (its CLI), polled while the panel is open
 //   EQ curve       the active preset's JSON file, watched for changes
 //   live / meter   the PipeWire graph, through Quickshell
@@ -40,9 +42,11 @@ Panel {
   readonly property bool charging: battery.status === "charging"
   readonly property bool headsetOff: battery.status === "off"
 
-  // Mouse, from UPower. Only devices that report a battery are listed there,
-  // so a wired-only mouse never shows. `showMouse: false` in the widget's
-  // shell.json entry turns it off.
+  // Mouse: from UPower when it lists one (a wireless mouse on its receiver),
+  // otherwise from Solaar if installed (a Logitech mouse on its cable,
+  // charging, which the kernel then treats as a plain wired mouse). With
+  // neither, nothing shows. `showMouse: false` in the widget's shell.json
+  // entry turns it off.
   readonly property bool showMouse: setting("showMouse", true) === true
   readonly property var mouseDevice: {
     var devices = UPower.devices ? UPower.devices.values : []
@@ -50,9 +54,16 @@ Panel {
       if (devices[i] && devices[i].type === UPowerDeviceType.Mouse && devices[i].isPresent) return devices[i]
     return null
   }
-  readonly property var mouse: showMouse
-    ? Model.mouseBattery(mouseDevice, { charging: UPowerDeviceState.Charging, fullyCharged: UPowerDeviceState.FullyCharged })
-    : Model.EMPTY_MOUSE
+  readonly property var upowerMouse: Model.mouseBattery(mouseDevice, {
+    charging: UPowerDeviceState.Charging,
+    fullyCharged: UPowerDeviceState.FullyCharged,
+    unknown: UPowerDeviceState.Unknown
+  })
+  property var solaarMouse: Model.EMPTY_MOUSE
+  readonly property var mouse: !showMouse ? Model.EMPTY_MOUSE
+    : (upowerMouse.present ? upowerMouse : solaarMouse)
+  // The mouse just left UPower (e.g. its cable went in): ask Solaar now.
+  onUpowerMouseChanged: if (!upowerMouse.present) refreshMouse(1)
 
   // Easy Effects, from bin/eq-state.
   property var eq: Model.EMPTY_EQ
@@ -79,6 +90,7 @@ Panel {
 
   readonly property string eqStateScript: scriptPath("bin/eq-state")
   readonly property string readHeadsetScript: scriptPath("bin/read-headset")
+  readonly property string readMouseScript: scriptPath("bin/read-mouse")
 
   function scriptPath(relative) {
     return String(Qt.resolvedUrl(relative)).replace(/^file:\/\//, "")
@@ -143,6 +155,13 @@ Panel {
   }
   function refreshEq() { if (!eqProc.running) eqProc.running = true }
 
+  // Only needed while UPower has no mouse; same max-age idea as the headset.
+  function refreshMouse(maxAge) {
+    if (!showMouse || upowerMouse.present || mouseProc.running) return
+    mouseProc.command = ["sh", root.readMouseScript, String(maxAge || 0)]
+    mouseProc.running = true
+  }
+
   function setBypassed(bypassed) {
     runEqCommand(["easyeffects", "-b", bypassed ? "1" : "2"], { bypassed: bypassed })
   }
@@ -169,9 +188,19 @@ Panel {
 
   // ================= Data sources =================
 
-  // bin/read-headset does the reading: one at a time across bars, safe to
-  // kill, and into the shared file (see the script).
+  // bin/read-headset and bin/read-mouse do the reading: one at a time across
+  // bars, safe to kill, and into shared files (see the scripts).
   Process { id: batteryProc }
+  Process { id: mouseProc }
+
+  FileView {
+    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omabateq/solaar.txt"
+    watchChanges: true
+    printErrors: false
+    onFileChanged: reload()
+    onLoaded: root.solaarMouse = Model.parseSolaarMouse(text())
+    onLoadFailed: root.solaarMouse = Model.EMPTY_MOUSE
+  }
 
   FileView {
     id: headsetFile
@@ -218,7 +247,7 @@ Panel {
   }
 
   // Battery: every minute, every 10 s while the panel is open.
-  Timer { interval: root.opened ? 10000 : 60000; running: true; repeat: true; onTriggered: root.refreshBattery(root.opened ? 5 : 20) }
+  Timer { interval: root.opened ? 10000 : 60000; running: true; repeat: true; onTriggered: { root.refreshBattery(root.opened ? 5 : 20); root.refreshMouse(root.opened ? 5 : 20) } }
   // Easy Effects can change preset by itself (per-device autoload).
   Timer { interval: 3000; running: root.opened; repeat: true; onTriggered: root.refreshEq() }
   Timer { id: afterStart; interval: 1500; onTriggered: root.refreshEq() }
@@ -226,20 +255,24 @@ Panel {
 
   // Plugging or unplugging a USB device (the headset's charging cable, its
   // receiver) re-reads the battery a moment later instead of at the next poll.
+  // Every USB device has a node in /dev/bus/usb/<bus>/, so a file appearing or
+  // disappearing there is a plug or unplug. (inotifywait writes each event
+  // out as it happens; `udevadm monitor` held them back when not printing to
+  // a terminal.)
   Process {
     id: usbEvents
-    command: ["udevadm", "monitor", "--udev", "--subsystem-match=usb/usb_device"]
+    command: ["inotifywait", "-m", "-r", "-q", "-e", "create,delete", "/dev/bus/usb"]
     running: true
     stdout: SplitParser {
-      onRead: function(line) { if (/ (add|remove) /.test(line)) usbSettle.restart() }
+      onRead: function(line) { usbSettle.restart() }
     }
     onExited: usbRestart.restart()
   }
-  Timer { id: usbSettle; interval: 1500; onTriggered: root.refreshBattery(1) }
+  Timer { id: usbSettle; interval: 1500; onTriggered: { root.refreshBattery(1); root.refreshMouse(1) } }
   Timer { id: usbRestart; interval: 5000; onTriggered: usbEvents.running = true }
 
-  Component.onCompleted: refreshBattery(20)
-  onOpenedChanged: if (opened) { refreshBattery(2); refreshEq() }
+  Component.onCompleted: { refreshBattery(20); refreshMouse(20) }
+  onOpenedChanged: if (opened) { refreshBattery(2); refreshMouse(2); refreshEq() }
 
 
   // ================= Bar button =================

@@ -9,7 +9,7 @@ const assert = require("assert")
 const source = fs.readFileSync(path.join(__dirname, "..", "Model.js"), "utf8")
   .replace(/^\.pragma library\s*$/m, "")
 const Model = new Function(source +
-  "; return { parseBattery, confirmBattery, mouseBattery, parseEqState, parsePreset, isPresetName, prettyPreset, response }")()
+  "; return { parseBattery, confirmBattery, mouseBattery, parseSolaarMouse, parseEqState, parsePreset, isPresetName, prettyPreset, response }")()
 
 function test(name, fn) {
   try { fn(); console.log("  ok  " + name) }
@@ -74,12 +74,54 @@ test("battery: readings that never agree stop rechecking after 3 tries", () => {
 })
 
 test("mouse: UPower device → level, charging, name", () => {
-  const states = { charging: 1, fullyCharged: 4 }
+  const states = { charging: 1, fullyCharged: 4, unknown: 0 }
+  assert.strictEqual(Model.mouseBattery({ isPresent: true, percentage: 0.7, state: 0 }, states).present, false)
   assert.deepStrictEqual(Model.mouseBattery({ isPresent: true, percentage: 0.734, state: 2, model: "PRO X2" }, states),
     { present: true, level: 73, charging: false, name: "PRO X2" })
   assert.strictEqual(Model.mouseBattery({ isPresent: true, percentage: 1, state: 4 }, states).charging, true)
   assert.strictEqual(Model.mouseBattery({ isPresent: false, percentage: 0.5 }, states).present, false)
   assert.strictEqual(Model.mouseBattery(null, states).present, false)
+})
+
+// Trimmed `solaar show` with the mouse on its cable: the receiver (whose
+// paired mouse is "not found" while wired) comes first, then the mouse.
+const SOLAAR_WIRED = `solaar version 1.1.20
+Lightspeed Receiver
+  Device path  : /dev/hidraw6
+  USB id       : 046d:C54D
+  Has 1 paired device(s) out of a maximum of 2.
+  1: Device not found
+PRO X2 SUPERSTRIKE
+     Device path  : /dev/hidraw18
+     USB id       : 046d:C0A8
+     Codename     : PRO X2 SUPERSTRIKE
+     Kind         : mouse
+     Protocol     : HID++ 4.2
+     Supports 36 HID++ 2.0 features:
+         6: UNIFIED BATTERY        {1004} V5
+            Battery: 75%, BatteryStatus.RECHARGING.
+         7: XY STATS               {2250} V1
+`
+
+test("solaar: wired mouse charging", () => {
+  assert.deepStrictEqual(Model.parseSolaarMouse(SOLAAR_WIRED),
+    { present: true, level: 75, charging: true, name: "PRO X2 SUPERSTRIKE" })
+})
+
+test("solaar: discharging, keyboards skipped, nothing found", () => {
+  const discharging = SOLAAR_WIRED.replace("RECHARGING", "DISCHARGING")
+  assert.strictEqual(Model.parseSolaarMouse(discharging).charging, false)
+  const keyboardFirst = "Codename : G915\n Kind : keyboard\n Battery: 40%, BatteryStatus.DISCHARGING.\n" + SOLAAR_WIRED
+  assert.strictEqual(Model.parseSolaarMouse(keyboardFirst).level, 75)
+  assert.strictEqual(Model.parseSolaarMouse("Lightspeed Receiver\n  1: Device not found\n").present, false)
+  assert.strictEqual(Model.parseSolaarMouse("").present, false)
+})
+
+test("solaar: the live reading, if there is one", () => {
+  const live = path.join(process.env.XDG_RUNTIME_DIR || "/tmp", "omabateq/solaar.txt")
+  if (!fs.existsSync(live)) return
+  const m = Model.parseSolaarMouse(fs.readFileSync(live, "utf8"))
+  console.log("       live: " + JSON.stringify(m))
 })
 
 test("eq state: parses and drops unsafe preset names", () => {

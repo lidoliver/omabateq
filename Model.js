@@ -54,11 +54,12 @@ var EMPTY_MOUSE = { present: false, level: -1, charging: false, name: "" }
 
 // A UPower device (or anything shaped like one) → { present, level, charging, name }.
 //   device   { isPresent, percentage (0..1), state, model }
-//   states   { charging, fullyCharged }: the UPowerDeviceState values to compare with
+//   states   { charging, fullyCharged, unknown }: UPowerDeviceState values
 // UPower only lists devices that report a battery, so a wired-only mouse never
-// gets here.
+// gets here. An Unknown state is a leftover: a Logitech receiver keeps its
+// mouse's last level after the mouse switches to its cable.
 function mouseBattery(device, states) {
-  if (!device || !device.isPresent) return EMPTY_MOUSE
+  if (!device || !device.isPresent || device.state === states.unknown) return EMPTY_MOUSE
   var fraction = Number(device.percentage)
   return {
     present: true,
@@ -66,6 +67,48 @@ function mouseBattery(device, states) {
     charging: device.state === states.charging || device.state === states.fullyCharged,
     name: String(device.model || "").slice(0, 60)
   }
+}
+
+
+// `solaar show` output (bin/read-mouse) → the first mouse that reports a
+// battery, shaped like mouseBattery(). Each device's block starts with its
+// "Codename" line; the battery line looks like
+//   "Battery: 75%, BatteryStatus.RECHARGING."
+// FULL counts as charging: a mouse only reports it while on the cable.
+var SOLAAR_CHARGING = ["RECHARGING", "SLOW_RECHARGE", "ALMOST_FULL", "FULL"]
+
+function parseSolaarMouse(raw) {
+  var lines = String(raw || "").split("\n").slice(0, 2000)
+  var device = null
+
+  for (var i = 0; i <= lines.length; i++) {
+    var line = i < lines.length ? lines[i] : null
+    var codename = line !== null ? line.match(/^\s*Codename\s*:\s*(.+?)\s*$/) : null
+
+    // A new block (or the end): settle the one before it.
+    if (codename || line === null) {
+      if (device && device.kind === "mouse" && device.level >= 0) {
+        return {
+          present: true,
+          level: device.level,
+          charging: SOLAAR_CHARGING.indexOf(device.status) >= 0,
+          name: device.name.slice(0, 60)
+        }
+      }
+      device = codename ? { name: codename[1], kind: "", level: -1, status: "" } : null
+      continue
+    }
+    if (!device) continue
+
+    var kind = line.match(/^\s*Kind\s*:\s*(\w+)/)
+    if (kind) device.kind = kind[1]
+    var battery = line.match(/Battery:\s*(\d{1,3})%,\s*BatteryStatus\.(\w+)/)
+    if (battery && device.level < 0) {
+      device.level = Math.min(100, Number(battery[1]))
+      device.status = battery[2]
+    }
+  }
+  return EMPTY_MOUSE
 }
 
 
