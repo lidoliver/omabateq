@@ -1,0 +1,20 @@
+{
+  "title": "Headset",
+  "status.available": "Connected",
+  "status.charging": "Charging",
+  "status.chargingNoLevel": "Charging · level shows off the cable",
+  "status.off": "Headset off",
+  "status.unknown": "No battery reading",
+  "eq.section": "Equalizer",
+  "eq.live": "Live",
+  "eq.idle": "Idle",
+  "eq.bypassed": "Bypassed",
+  "eq.turnOn": "Turn equalizer on",
+  "eq.bypass": "Bypass equalizer",
+  "eq.preamp": "Preamp %1 dB",
+  "eq.noEqualizer": "No equalizer in this preset",
+  "eq.notRunning": "Easy Effects is not running",
+  "eq.start": "Start Easy Effects",
+  "eq.output": "Output",
+  "eq.presets": "Presets"
+}

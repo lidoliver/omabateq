@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "lidoliver.omabateq",
+  "name": "omabateq",
+  "version": "1.0.0",
+  "author": "lidoliver",
+  "license": "MIT",
+  "description": "Wireless headset battery in the bar, and the live Easy Effects equalizer one click away: active preset, response curve, bypass switch, output level and preset switching.",
+  "homepage": "https://github.com/lidoliver/omabateq",
+  "kinds": [
+    "bar-widget"
+  ],
+  "entryPoints": {
+    "barWidget": "Panel.qml"
+  },
+  "barWidget": {
+    "displayName": "omabateq",
+    "description": "Headset battery and Easy Effects equalizer",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}

@@ -1,0 +1,23 @@
+#!/bin/sh
+# Prints Easy Effects' output-side state as key=value lines for the panel:
+#
+#   running=1|0
+#   preset=<name>       the last loaded output preset
+#   bypass=1|2          1 = bypassed, 2 = processing
+#   presetItem=<name>   one line per saved output preset
+#
+# Checks for a running instance first, because `easyeffects -a` would
+# otherwise start one.
+
+if ! pgrep -x easyeffects >/dev/null; then
+  echo running=0
+  exit 0
+fi
+
+echo running=1
+echo "preset=$(easyeffects -a output)"
+echo "bypass=$(easyeffects -b 3)"
+
+# `easyeffects -p` lists "Output presets:" then "<n>\t<name>" lines, then a
+# blank line before the input presets.
+easyeffects -p | sed -n '/^Output presets:/,/^$/ s/^[0-9][0-9]*\t/presetItem=/p'
