@@ -34,5 +34,9 @@ if [ "$1" = "--locked" ]; then
 fi
 
 mkdir -p "$dir"
+# The bars watch this file, and a watch only takes on a file that exists
+# (see Panel.qml), so it is created up front, empty until the first read.
+# Never touched when it exists: its age decides whether to read again.
+[ -e "$cache" ] || : > "$cache"
 flock -w 10 "$lock" sh "$0" --locked "${1:-0}" &
 wait

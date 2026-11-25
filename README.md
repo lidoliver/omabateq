@@ -13,11 +13,14 @@ bottom.
 
 ## What it shows
 
-**In the bar:** a headset icon with the battery percentage. It shows a
-charging symbol when the headset only reports that it is charging, fades when
-the headset is switched off, and switches to the mouse's battery when there is
-no headset. With neither, the widget is hidden. Plugging or unplugging the
-charging cable shows within a couple of seconds.
+**In the bar:** a waveform icon with the headset's battery percentage (a
+waveform rather than a headset, so it doesn't look like the volume icon next
+to it). It shows a charging symbol when the headset only reports that it is
+charging, and switches to the mouse's battery while the headset is switched
+off or not there (with no mouse, a switched-off headset shows faded). With
+neither, the widget is hidden. Plugging or unplugging the
+charging cable shows within a couple of seconds, and so does switching a
+HyperX Cloud Alpha Wireless on or off.
 
 **In the panel:**
 
@@ -52,6 +55,20 @@ reads and displays it.
   next from the headset, so overlapping or interrupted reads give wrong
   levels. A reading that would change what is shown is only taken once a
   second read agrees with it.
+- **Headset on/off** — switching the headset on or off plugs nothing in, so
+  the USB watch can't see it. Some receivers announce it themselves: the
+  HyperX Cloud Alpha Wireless receiver sends `21 bb 24 01` (off) or
+  `21 bb 24 02` (on). [`bin/watch-headset`](bin/watch-headset) listens for
+  that on the receiver's hidraw device and reads the battery right away. It
+  only listens, never sends, so it can't disturb `headsetcontrol` (every
+  program that opens the device gets its own copy of each report). One bar
+  runs it (a lock); idle it is a shell and a `dd` waiting on the device, no
+  CPU. Other headsets fall back to the minute poll; to add one, put its
+  `HID_ID` and announcement bytes in the script's table.
+- **Shared files after a reboot** — `$XDG_RUNTIME_DIR` starts empty, and a
+  Quickshell `FileView` pointed at a file that doesn't exist yet never notices
+  it being created. The scripts create their files first, and each bar only
+  starts watching once one of its own scripts has run.
 - **Mouse battery** — with [Solaar](https://github.com/pwr-Solaar/Solaar)
   installed, [`bin/read-mouse`](bin/read-mouse) reads Logitech devices with
   `solaar show` into a shared file like the headset's, on the same triggers
@@ -210,6 +227,8 @@ Model.js         parsing and the filter math, no QML
 bin/eq-state     reads Easy Effects' state through its CLI
 bin/read-headset reads the headset battery into a shared file
 bin/read-mouse   reads a Logitech mouse through Solaar into a shared file
+bin/watch-headset re-reads the battery when the receiver says the headset
+                 was switched on or off
 i18n/en.json     the panel's text
 tests/           node tests for Model.js
 ```

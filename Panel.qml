@@ -15,7 +15,9 @@ import "Model.js" as Model
 // Where the data comes from:
 //   headset        bin/read-headset (headsetcontrol) writes a shared file that
 //                  every bar watches: once a minute, and right away when a USB
-//                  device comes or goes (e.g. the charging cable; inotifywait)
+//                  device comes or goes (e.g. the charging cable; inotifywait),
+//                  and when the receiver says the headset was switched on or
+//                  off (bin/watch-headset)
 //   mouse          bin/read-mouse (`solaar show`) into a shared file, when
 //                  Solaar is installed and sees one; otherwise UPower
 //   Easy Effects   bin/eq-state (its CLI), polled while the panel is open
@@ -89,6 +91,7 @@ Panel {
   readonly property string eqStateScript: scriptPath("bin/eq-state")
   readonly property string readHeadsetScript: scriptPath("bin/read-headset")
   readonly property string readMouseScript: scriptPath("bin/read-mouse")
+  readonly property string watchHeadsetScript: scriptPath("bin/watch-headset")
 
   function scriptPath(relative) {
     return String(Qt.resolvedUrl(relative)).replace(/^file:\/\//, "")
@@ -98,15 +101,19 @@ Panel {
   // ================= Text =================
 
   readonly property string headsetGlyph: "󰋎"
+  // The bar uses a waveform, not the headset: the audio widget right next
+  // to it is already a pair of headphones.
+  readonly property string barHeadsetGlyph: "󱑽"
   readonly property string mouseGlyph: "󰍽"
   readonly property string chargingGlyph: "󰂄"
 
   readonly property string percentText: hasLevel ? Commons.I18n.formatNumber(battery.level) + "%" : ""
   readonly property string mousePercentText: mouse.level >= 0 ? Commons.I18n.formatNumber(mouse.level) + "%" : ""
 
-  // The bar shows the headset; with no headset around, the mouse instead.
-  readonly property bool barShowsMouse: !present && mouse.present
-  readonly property string barGlyph: barShowsMouse ? mouseGlyph : headsetGlyph
+  // The bar shows the headset; while it is switched off or not around, the
+  // mouse instead (if there is one).
+  readonly property bool barShowsMouse: mouse.present && (!present || headsetOff)
+  readonly property string barGlyph: barShowsMouse ? mouseGlyph : barHeadsetGlyph
 
   // Next to the bar icon: the level, or a charging glyph when there is none.
   readonly property string barLabel: {
@@ -188,11 +195,21 @@ Panel {
 
   // bin/read-headset and bin/read-mouse do the reading: one at a time across
   // bars, safe to kill, and into shared files (see the scripts).
-  Process { id: batteryProc }
-  Process { id: mouseProc }
+  Process { id: batteryProc; onExited: root.headsetFileReady = true }
+  Process { id: mouseProc; onExited: root.mouseFileReady = true }
+
+  // A FileView only watches a file that exists when it starts: one pointed at
+  // a missing file never hears about it being created. After a reboot the
+  // files don't exist yet when the bars start (they live in XDG_RUNTIME_DIR),
+  // so a bar that started too early showed no headset until the next shell
+  // restart. The scripts create the files first, and a bar points its
+  // FileViews at them only once one of its own scripts has run.
+  property bool headsetFileReady: false
+  property bool mouseFileReady: false
+  readonly property string sharedDir: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omabateq"
 
   FileView {
-    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omabateq/solaar.txt"
+    path: root.mouseFileReady ? root.sharedDir + "/solaar.txt" : ""
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
@@ -202,7 +219,7 @@ Panel {
 
   FileView {
     id: headsetFile
-    path: (Quickshell.env("XDG_RUNTIME_DIR") || "/tmp") + "/omabateq/headset.json"
+    path: root.headsetFileReady ? root.sharedDir + "/headset.json" : ""
     watchChanges: true
     printErrors: false
     onFileChanged: reload()
@@ -266,13 +283,22 @@ Panel {
     }
     onExited: usbRestart.restart()
   }
-  Timer { id: usbSettle; interval: 1500; onTriggered: { root.refreshBattery(1); root.refreshMouse(1); usbLate.restart() } }
+  Timer { id: usbSettle; interval: 1500; onTriggered: { root.refreshBattery(1); root.refreshMouse(1); usbLate.restart(); root.startHeadsetWatch() } }
   // A mouse switching between cable and receiver can take a few seconds to
   // answer on its new connection, so it gets a second look.
   Timer { id: usbLate; interval: 5000; onTriggered: root.refreshMouse(1) }
   Timer { id: usbRestart; interval: 5000; onTriggered: usbEvents.running = true }
 
-  Component.onCompleted: { refreshBattery(20); refreshMouse(20) }
+  // Switching the headset on or off plugs nothing in, so the USB watch above
+  // doesn't see it. bin/watch-headset listens to the receiver instead, which
+  // announces it, and reads the battery right away. One bar gets to run it
+  // (the others' copies exit at once); it ends when the receiver is unplugged
+  // and starts again after the next USB event, or within a minute.
+  Process { id: headsetWatch; command: ["sh", root.watchHeadsetScript] }
+  function startHeadsetWatch() { if (!headsetWatch.running) headsetWatch.running = true }
+  Timer { interval: 60000; running: true; repeat: true; onTriggered: root.startHeadsetWatch() }
+
+  Component.onCompleted: { refreshBattery(20); refreshMouse(20); startHeadsetWatch() }
   onOpenedChanged: if (opened) { refreshBattery(2); refreshMouse(2); refreshEq() }
 
 

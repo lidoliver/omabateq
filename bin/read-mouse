@@ -30,5 +30,7 @@ if [ "$1" = "--locked" ]; then
 fi
 
 mkdir -p "$dir"
+# Created up front for the bars' watch, like read-headset does.
+[ -e "$out" ] || : > "$out"
 flock -w 20 "$lock" sh "$0" --locked "${1:-0}" &
 wait

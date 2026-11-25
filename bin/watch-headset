@@ -1,0 +1,61 @@
+#!/bin/sh
+# Listens to the headset's receiver and re-reads the battery the moment the
+# headset is switched on or off, instead of waiting for the next minute's
+# poll. Turning the headset on or off doesn't plug or unplug anything, so the
+# panel's USB watch never sees it, but some receivers announce it themselves.
+#
+# Only listens: it never sends anything to the receiver. Every program that
+# opens a hidraw device gets its own copy of each report, so this takes
+# nothing away from headsetcontrol's reads (sending would: see read-headset).
+#
+# Every bar starts this script, and one of them gets to listen (a lock); the
+# rest exit right away. Its reads go to the shared file all bars watch, so one
+# listener is enough. It exits when the receiver goes away; the bars start it
+# again after a USB event and once a minute.
+#
+# Idle cost: this shell and one `dd` waiting on the device. Each report wakes
+# it for one dd and one od: a few per minute (mostly replies to the battery
+# reads themselves).
+
+here=$(dirname "$0")
+dir="${XDG_RUNTIME_DIR:-/tmp}/omabateq"
+
+# Receivers known to announce power changes: HID_ID → the first bytes (hex)
+# of that report.
+#   HyperX Cloud Alpha Wireless: 21 bb 24 01 = switched off, 21 bb 24 02 = on
+dev="" announce=""
+for node in /sys/class/hidraw/hidraw*; do
+  [ -e "$node/device/uevent" ] || continue
+  case "$(grep -m1 '^HID_ID=' "$node/device/uevent")" in
+    HID_ID=0003:000003F0:0000098D) dev="/dev/${node##*/}" announce=21bb24 ;;
+  esac
+done
+[ -n "$dev" ] && [ -r "$dev" ] || exit 0
+
+mkdir -p "$dir"
+exec 9>"$dir/watch.lock"
+flock -n 9 || exit 0
+
+# Keeps the device open, so no report is missed between two reads.
+#
+# The lock is held by fd 9, and every child that inherits fd 9 holds it too.
+# When the shell restarts it kills this script but not the `dd` waiting on the
+# device, so that dd must not have fd 9, or the new shell's bars would find
+# the lock taken until the next report arrives. `dd ... 9>&-` closes it in dd
+# itself; a $( ) around dd would fork a subshell that keeps it, so dd writes
+# the report to a file and only the decoding (instant) runs in a $( ).
+exec 3<"$dev"
+report="$dir/watch.report"
+while :; do
+  # One read() on hidraw returns exactly one report.
+  dd bs=512 count=1 status=none of="$report" <&3 9>&- || exit 0
+  head=$(od -An -tx1 -N3 "$report" | tr -d ' \n')
+  # Nothing read: the receiver was unplugged.
+  [ -n "$head" ] || exit 0
+  if [ "$head" = "$announce" ]; then
+    # The headset needs a moment before it answers on its new state; the
+    # second read catches a slow one. The panel confirms a change with one
+    # more read of its own (Model.confirmBattery).
+    ( sleep 1.5; sh "$here/read-headset" 1; sleep 4; sh "$here/read-headset" 1 ) 9>&- 3<&- &
+  fi
+done
